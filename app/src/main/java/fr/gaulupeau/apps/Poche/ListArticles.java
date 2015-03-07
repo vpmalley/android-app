@@ -82,9 +82,9 @@ public class ListArticles extends Activity {
 	public void setupList(Boolean showAll) {
 		readList = (ListView) findViewById(R.id.liste_articles);
         readArticlesInfo = new ArrayList<Article>();
-        String filter = null;
+        String filter = ARTICLE_SYNC + "=0";
         if (showAll == false) {
-			filter = ARCHIVE + "=0";
+			filter += " AND " + ARCHIVE + "=0";
 		}
         ReadingListAdapter ad = getAdapterQuery(filter, readArticlesInfo);
         readList.setAdapter(ad);

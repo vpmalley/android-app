@@ -19,8 +19,6 @@ import java.net.URL;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.text.DateFormat;
-import java.util.Date;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
@@ -45,6 +43,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.database.sqlite.SQLiteConstraintException;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
@@ -53,18 +52,16 @@ import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
 import android.provider.Browser;
-import android.text.Html;
 import android.util.Base64;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
+import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Toast;
+
+import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.MY_ID;
 import static fr.gaulupeau.apps.Poche.Helpers.PREFS_NAME;
 import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.ARTICLE_TABLE;
 import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.ARTICLE_URL;
@@ -118,35 +115,9 @@ import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.ARTICLE_DATE;
 			 final ConnectivityManager conMgr =  (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
 			 final NetworkInfo activeNetwork = conMgr.getActiveNetworkInfo();
 			 if (activeNetwork != null && activeNetwork.isConnected()) {
-		            // Start to build the poche URL
-					Uri.Builder pocheSaveUrl = Uri.parse(pocheUrl).buildUpon();
-					// Add the parameters from the call
-					pocheSaveUrl.appendQueryParameter("action", "add");
-					byte[] data = null;
-					try {
-						data = pageUrl.getBytes("UTF-8");
-					} catch (UnsupportedEncodingException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}
-					String base64 = Base64.encodeToString(data, Base64.DEFAULT);
-					pocheSaveUrl.appendQueryParameter("url", base64);
-					System.out.println("base64 : " + base64);
-					System.out.println("pageurl : " + pageUrl);
-					
-					// Load the constructed URL in the browser
-					Intent i = new Intent(Intent.ACTION_VIEW);
-					i.setData(pocheSaveUrl.build());
-					i.putExtra(Browser.EXTRA_APPLICATION_ID, getPackageName());
-					// If user has more then one browser installed give them a chance to
-					// select which one they want to use 
-					
-					startActivity(i);
-					// That is all this app needs to do, so call finish()
-					this.finish();
-			 } else {
-				 // Afficher alerte connectivité
-				 showToast(getString(R.string.txtNetOffline));
+         saveOnServer(pageUrl);
+       } else {
+				 saveOfflineForLater(pageUrl);
 			 }
         }
         else {
@@ -169,7 +140,8 @@ import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.ARTICLE_DATE;
 							 @Override
 							 public void run() {
 								 //pushRead();
-								 parseRSS();
+                 parseRSS();
+                 pushSavedForLater();
 								 runOnUiThread(new Runnable() {
 									 @Override
 									 public void run() {
@@ -206,7 +178,77 @@ import static fr.gaulupeau.apps.Poche.ArticlesSQLiteOpenHelper.ARTICLE_DATE;
         }
     }
 
-	private void checkAndHandleAfterUpdate() {
+  private void pushSavedForLater() {
+    ArticlesSQLiteOpenHelper helper = new ArticlesSQLiteOpenHelper(getApplicationContext());
+    database = helper.getReadableDatabase();
+    String[] getStrColumns = new String[] {ARTICLE_URL, MY_ID, ARTICLE_TITLE, ARTICLE_CONTENT, ARCHIVE};
+    Cursor ac = database.query(
+            ARTICLE_TABLE,
+            getStrColumns,
+            ARTICLE_SYNC + "=1", null, null, null, ARTICLE_DATE + " DESC");
+    ac.moveToFirst();
+    if(!ac.isAfterLast()) {
+      do {
+        String pageUrl = ac.getString(ac.getColumnIndex(ARTICLE_URL));
+        Log.d("db", "push saved url " + pageUrl);
+        saveOnServer(pageUrl);
+      } while (ac.moveToNext());
+    }
+    database.delete(ARTICLE_TABLE, ARTICLE_SYNC + "=1", null);
+    ac.close();
+  }
+
+  private void saveOnServer(String pageUrl) {
+    // Start to build the poche URL
+    Uri.Builder pocheSaveUrl = Uri.parse(pocheUrl).buildUpon();
+    // Add the parameters from the call
+    pocheSaveUrl.appendQueryParameter("action", "add");
+    byte[] data = null;
+    try {
+      data = pageUrl.getBytes("UTF-8");
+    } catch (UnsupportedEncodingException e) {
+      Log.w("url", "url was wrongly encoded, data may be lost");
+    }
+    String base64 = Base64.encodeToString(data, Base64.DEFAULT);
+    pocheSaveUrl.appendQueryParameter("url", base64);
+    System.out.println("base64 : " + base64);
+    System.out.println("pageurl : " + pageUrl);
+
+    // Load the constructed URL in the browser
+    Intent i = new Intent(Intent.ACTION_VIEW);
+    i.setData(pocheSaveUrl.build());
+    i.putExtra(Browser.EXTRA_APPLICATION_ID, getPackageName());
+    // If user has more then one browser installed give them a chance to
+    // select which one they want to use
+
+    startActivity(i);
+    // That is all this app needs to do, so call finish()
+    this.finish();
+  }
+
+  private void saveOfflineForLater(String pageUrl) {
+    Log.d("db", "saving for later " + pageUrl);
+
+    ArticlesSQLiteOpenHelper helper = new ArticlesSQLiteOpenHelper(getApplicationContext());
+    database = helper.getWritableDatabase();
+
+    ContentValues values = new ContentValues();
+    values.put(ARTICLE_URL, pageUrl);
+    values.put(ARTICLE_SYNC, 1);
+    try {
+      database.insertOrThrow(ARTICLE_TABLE, null, values);
+      showToast("Article saved for later.");
+    } catch (SQLiteConstraintException e) {
+      Log.w("db", "Could not save article for later. " + e.getMessage());
+      showToast("Could not save article for later.");
+    } catch (SQLiteException e) {
+      database.execSQL("ALTER TABLE " + ARTICLE_TABLE + " ADD COLUMN " + ARTICLE_DATE + " datetime;");
+      database.insertOrThrow(ARTICLE_TABLE, null, values);
+    }
+    this.finish();
+  }
+
+  private void checkAndHandleAfterUpdate() {
 		SharedPreferences pref = getSharedPreferences(PREFS_NAME, 0);
 
 		if (pref.getInt("update_checker",0) < 9) {
