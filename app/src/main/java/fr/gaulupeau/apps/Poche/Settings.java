@@ -49,7 +49,11 @@ public class Settings extends Activity {
 			public void onClick(View v) {
 				SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
 	        	SharedPreferences.Editor editor = settings.edit();
-	        	editor.putString("pocheUrl", editPocheUrl.getText().toString());
+        String pocheUrl = editPocheUrl.getText().toString();
+        if (!pocheUrl.contains("://")) {
+          pocheUrl = "http://" + pocheUrl;
+        }
+        editor.putString("pocheUrl", pocheUrl);
 	        	editor.putString("APIUsername", editAPIUsername.getText().toString());
 	        	editor.putString("APIToken", editAPIToken.getText().toString());
 				editor.commit();
